@@ -14,18 +14,17 @@
 
 #include "RangeAnalysis.h"
 
-#include <stdint.h>
 #include <cassert>
 #include <iterator>
+#include <stdint.h>
 #include <string>
 #include <system_error>
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/ilist_iterator.h"
 #include "llvm/ADT/iterator.h"
-#include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Argument.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -37,8 +36,7 @@
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
-#include "llvm/PassAnalysisSupport.h"
-#include "llvm/PassSupport.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/FileSystem.h"
 
 int __builtin_clz(unsigned int);
@@ -188,8 +186,7 @@ void RangeAnalysis::updateConstantIntegers(unsigned maxBitWidth) {
 // ========================================================================== //
 // IntraProceduralRangeAnalysis
 // ========================================================================== //
-template<class CGT>
-char IntraProceduralRA<CGT>::ID = 0;
+template <class CGT> char IntraProceduralRA<CGT>::ID = 0;
 
 template <class CGT> APInt IntraProceduralRA<CGT>::getMin() { return Min; }
 
@@ -265,8 +262,7 @@ template <class CGT> IntraProceduralRA<CGT>::~IntraProceduralRA() {
 // ========================================================================== //
 // InterProceduralRangeAnalysis
 // ========================================================================== //
-template<class CGT>
-char InterProceduralRA<CGT>::ID = 0;
+template <class CGT> char InterProceduralRA<CGT>::ID = 0;
 
 template <class CGT> APInt InterProceduralRA<CGT>::getMin() { return Min; }
 
@@ -429,23 +425,21 @@ void InterProceduralRA<CGT>::MatchParametersAndReturnValues(
 
     // Used by a non-instruction, or not the callee of a function, do not
     // match.
-    if (!isa<CallInst>(Us) && !isa<InvokeInst>(Us)) {
+    if (!isa<CallBase>(Us)) {
       continue;
     }
 
-    Instruction *caller = cast<Instruction>(Us);
+    CallBase *caller = cast<CallBase>(Us);
 
-    CallSite CS(caller);
-
-    if (!CS.isCallee(&U)) {
+    if (!caller->isCallee(&U)) {
       continue;
     }
 
     // Iterate over the real parameters and put them in the data structure
-    CallSite::arg_iterator AI;
-    CallSite::arg_iterator EI;
+    User::op_iterator AI, EI;
 
-    for (i = 0, AI = CS.arg_begin(), EI = CS.arg_end(); AI != EI; ++i, ++AI) {
+    for (i = 0, AI = caller->arg_begin(), EI = caller->arg_end(); AI != EI;
+         ++i, ++AI) {
       parameters[i].second = *AI;
     }
 
@@ -2308,10 +2302,8 @@ void ConstraintGraph::addSigmaOp(const PHINode *Sigma) {
 
 namespace {
 // LLVM's Instructions.h doesn't provide a function like this, so I made one.
-bool isTernaryOp(const Instruction *I) {
-  return isa<SelectInst>(I);
-}
-}
+bool isTernaryOp(const Instruction *I) { return isa<SelectInst>(I); }
+} // namespace
 
 void ConstraintGraph::buildOperations(const Instruction *I) {
 
@@ -2587,7 +2579,7 @@ void ConstraintGraph::buildValueBranchMap(const BranchInst *br) {
 
 void ConstraintGraph::buildValueMaps(const Function &F) {
   for (const BasicBlock &BB : F) {
-    const TerminatorInst *ti = BB.getTerminator();
+    const Instruction *ti = BB.getTerminator();
     const BranchInst *br = dyn_cast<BranchInst>(ti);
     const SwitchInst *sw = dyn_cast<SwitchInst>(ti);
 
@@ -3122,10 +3114,10 @@ void ConstraintGraph::findIntervals() {
       buildConstantVector(component, compUseMap);
 #endif
 
-// generateEntryPoints(component, entryPoints);
-// iterate a fixed number of time before widening
-// update(component.size()*2 /*| NUMBER_FIXED_ITERATIONS*/, compUseMap,
-// entryPoints);
+      // generateEntryPoints(component, entryPoints);
+      // iterate a fixed number of time before widening
+      // update(component.size()*2 /*| NUMBER_FIXED_ITERATIONS*/, compUseMap,
+      // entryPoints);
 
 #ifdef PRINT_DEBUG
       if (func != nullptr) {

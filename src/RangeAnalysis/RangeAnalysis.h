@@ -50,13 +50,13 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Timer.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace llvm {
 class BranchInst;
 class SwitchInst;
-raw_ostream & dbgs();
+raw_ostream &dbgs();
 } // namespace llvm
 
 namespace RangeAnalysis {
@@ -165,8 +165,8 @@ public:
   Range &operator=(const Range &other) = default;
   Range &operator=(Range &&) = default;
 
-  const APInt& getLower() const { return l; }
-  const APInt& getUpper() const { return u; }
+  const APInt &getLower() const { return l; }
+  const APInt &getUpper() const { return u; }
   void setLower(const APInt &newl) { this->l = newl; }
   void setUpper(const APInt &newu) { this->u = newu; }
   bool isUnknown() const { return type == Unknown; }
@@ -224,7 +224,7 @@ public:
   /// Initializes the value of the node.
   void init(bool outside);
   /// Returns the range of the variable represented by this node.
-  const Range& getRange() const { return interval; }
+  const Range &getRange() const { return interval; }
   /// Returns the variable represented by this node.
   const Value *getValue() const { return V; }
   /// Changes the status of the variable represented by this node.
