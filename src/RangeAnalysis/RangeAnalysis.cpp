@@ -3272,7 +3272,7 @@ void ConstraintGraph::print(const Function &F, raw_ostream &OS) const {
 void ConstraintGraph::printToFile(const Function &F,
                                   const std::string &FileName) {
   std::error_code ErrorInfo;
-  raw_fd_ostream file(FileName, ErrorInfo, sys::fs::F_Text);
+  raw_fd_ostream file(FileName, ErrorInfo, sys::fs::OF_Text);
 
   if (!file.has_error()) {
     print(F, file);
