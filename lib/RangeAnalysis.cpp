@@ -100,12 +100,9 @@ Profile prof;
 
 // Print name of variable according to its type
 void printVarName(const Value *V, raw_ostream &OS) {
-  const Argument *A = nullptr;
-  const Instruction *I = nullptr;
-
-  if ((A = dyn_cast<Argument>(V)) != nullptr) {
+  if (const auto *A = dyn_cast<Argument>(V)) {
     OS << A->getParent()->getName() << "." << A->getName();
-  } else if ((I = dyn_cast<Instruction>(V)) != nullptr) {
+  } else if (const auto *I = dyn_cast<Instruction>(V)) {
     OS << I->getParent()->getParent()->getName() << "."
        << I->getParent()->getName() << "." << I->getName();
   } else {
@@ -178,10 +175,6 @@ void RangeAnalysis::updateConstantIntegers(unsigned maxBitWidth) {
   Zero = APInt(MAX_BIT_INT, 0UL, true);
   One = APInt(MAX_BIT_INT, 1UL, true);
 }
-
-// unsigned RangeAnalysis::getBitWidth() {
-//	return MAX_BIT_INT;
-//}
 
 // ========================================================================== //
 // IntraProceduralRangeAnalysis
@@ -256,7 +249,6 @@ template <class CGT> IntraProceduralRA<CGT>::~IntraProceduralRA() {
   }
   maxVisit = maxtimes;
 #endif
-  //	delete CG;
 }
 
 // ========================================================================== //

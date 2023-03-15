@@ -17,8 +17,8 @@ if(NOT LLVM_ENABLE_RTTI)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
 endif(NOT LLVM_ENABLE_RTTI)
 
-include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
+include_directories(SYSTEM include ${LLVM_INCLUDE_DIRS})
 link_directories(${LLVM_LIBRARY_DIRS})
 
-add_subdirectory(RangeAnalysis)
-add_subdirectory(vSSA)
+add_subdirectory(lib)
+add_subdirectory(tools)
