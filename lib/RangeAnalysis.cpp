@@ -20,32 +20,32 @@
 #include <string>
 #include <system_error>
 
-#include "llvm/ADT/APInt.h"
-#include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/ilist_iterator.h"
-#include "llvm/ADT/iterator.h"
-#include "llvm/IR/Argument.h"
-#include "llvm/IR/ConstantRange.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/InstIterator.h"
-#include "llvm/IR/Instruction.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Type.h"
-#include "llvm/IR/Use.h"
-#include "llvm/IR/User.h"
-#include "llvm/IR/Value.h"
-#include "llvm/Pass.h"
-#include "llvm/Support/FileSystem.h"
+#include <llvm/ADT/APInt.h>
+#include <llvm/ADT/Statistic.h>
+#include <llvm/ADT/ilist_iterator.h>
+#include <llvm/ADT/iterator.h>
+#include <llvm/IR/Argument.h>
+#include <llvm/IR/ConstantRange.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/InstIterator.h>
+#include <llvm/IR/Instruction.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Type.h>
+#include <llvm/IR/Use.h>
+#include <llvm/IR/User.h>
+#include <llvm/IR/Value.h>
+#include <llvm/Pass.h>
+#include <llvm/Support/FileSystem.h>
 
 int __builtin_clz(unsigned int);
+
+using namespace llvm;
 
 #define DEBUG_TYPE "range-analysis"
 
 namespace RangeAnalysis {
-
-using namespace llvm;
 
 // These macros are used to get stats regarding the precision of our analysis.
 STATISTIC(usedBits, "Initial number of bits.");
