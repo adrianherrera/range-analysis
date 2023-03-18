@@ -9,33 +9,38 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <llvm/ADT/Statistic.h>
+#include <llvm/Analysis/DominanceFrontier.h>
+#include <llvm/IR/Dominators.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
+#include <llvm/Transforms/Utils/Local.h>
+
 #include "vSSA.h"
 
-#define DEBUG_TYPE "range-analysis"
+#define DEBUG_TYPE "vSSA"
 
 using namespace llvm;
 
+namespace {
 static const std::string vSSA_PHI = "vSSA_phi";
 static const std::string vSSA_SIG = "vSSA_sigma";
 
 STATISTIC(numsigmas, "Number of sigmas");
 STATISTIC(numphis, "Number of phis");
+} // anonymous namespace
 
-void vSSA::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<DominanceFrontierWrapperPass>();
-  AU.addRequired<DominatorTreeWrapperPass>();
-}
+bool vSSA::convert(Function &F, DominatorTree *DT, DominanceFrontier *DF) {
+  DT_ = DT;
+  DF_ = DF;
 
-bool vSSA::runOnFunction(Function &F) {
   // For some reason, in the DominatorTree pass, an unreachable BasicBlock
   // inside a function is considered to be dominated by anything. This goes
   // against the definition of dominance in my algorithm, and breaks for
   // some programs. Therefore, I decided to remove unreachable blocks from
   // the program before the conversion to e-SSA takes place.
   removeUnreachableBlocks(F);
-
-  DT_ = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  DF_ = &getAnalysis<DominanceFrontierWrapperPass>().getDominanceFrontier();
 
   // Iterate over all Basic Blocks of the Function, calling the function that
   // creates sigma functions, if needed
@@ -45,38 +50,39 @@ bool vSSA::runOnFunction(Function &F) {
   return true;
 }
 
+PreservedAnalyses vSSA::run(Function &F, FunctionAnalysisManager &AM) {
+  auto *DT = &AM.getResult<DominatorTreeAnalysis>(F);
+  auto *DF = &AM.getResult<DominanceFrontierAnalysis>(F);
+
+  return convert(F, DT, DF) ? PreservedAnalyses::none()
+                            : PreservedAnalyses::all();
+}
+
+void LegacyvSSA::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<DominanceFrontierWrapperPass>();
+  AU.addRequired<DominatorTreeWrapperPass>();
+}
+
+bool LegacyvSSA::runOnFunction(Function &F) {
+  auto *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  auto *DF =
+      &getAnalysis<DominanceFrontierWrapperPass>().getDominanceFrontier();
+
+  vSSA Impl;
+  return Impl.convert(F, DT, DF);
+}
+
 void vSSA::createSigmasIfNeeded(BasicBlock *BB) {
   Instruction *ti = BB->getTerminator();
   // If the condition used in the terminator instruction is a Comparison
   // instruction:
   // for each operand of the CmpInst, create sigmas, depending on some
   // conditions
-  /*
-  if(isa<BranchInst>(ti)){
-          BranchInst * bc = cast<BranchInst>(ti);
-          if(bc->isConditional()){
-                  Value * cond = bc->getCondition();
-                  CmpInst *comparison = dyn_cast<CmpInst>(cond);
-                  for (User::const_op_iterator it = comparison->op_begin(), e =
-  comparison->op_end(); it != e; ++it) { Value *operand = *it; if
-  (isa<Instruction>(operand) || isa<Argument>(operand)) { insertSigmas(ti,
-  operand);
-                          }
-                  }
-          }
-  }
-  */
 
   // CASE 1: Branch Instruction
-  BranchInst *bi = NULL;
-  SwitchInst *si = NULL;
-  if ((bi = dyn_cast<BranchInst>(ti))) {
+  if (auto *bi = dyn_cast<BranchInst>(ti)) {
     if (bi->isConditional()) {
-      Value *condition = bi->getCondition();
-
-      ICmpInst *comparison = dyn_cast<ICmpInst>(condition);
-
-      if (comparison) {
+      if (auto *comparison = dyn_cast<ICmpInst>(bi->getCondition())) {
         // Create sigmas for ICmp operands
         for (User::const_op_iterator opit = comparison->op_begin(),
                                      opend = comparison->op_end();
@@ -101,7 +107,7 @@ void vSSA::createSigmasIfNeeded(BasicBlock *BB) {
     }
   }
   // CASE 2: Switch Instruction
-  else if ((si = dyn_cast<SwitchInst>(ti))) {
+  else if (auto *si = dyn_cast<SwitchInst>(ti)) {
     Value *condition = si->getCondition();
 
     if (isa<Instruction>(condition) || isa<Argument>(condition)) {
@@ -109,8 +115,7 @@ void vSSA::createSigmasIfNeeded(BasicBlock *BB) {
 
       // If the operand is a result of a indirect instruction (e.g. ZExt, SExt,
       // Trunc), Create sigmas for the operands of the operands too
-      CastInst *cinst = NULL;
-      if ((cinst = dyn_cast<CastInst>(condition))) {
+      if (auto *cinst = dyn_cast<CastInst>(condition)) {
         if (isa<Instruction>(cinst->getOperand(0)) ||
             isa<Argument>(cinst->getOperand(0))) {
           insertSigmas(ti, cinst->getOperand(0));
@@ -130,13 +135,12 @@ void vSSA::insertSigmas(Instruction *TI, Value *V) {
 
   // Vector that contains all vSSA_PHI nodes created in the process of creating
   // sigmas for V
-  SmallVector<PHINode *, 25> vssaphi_created;
+  SmallVector<PHINode *, 24> vssaphi_created;
 
   bool firstSigma = true;
 
   // Iterate over all successors of BB, checking if a sigma is needed
   for (unsigned i = 0, e = TI->getNumSuccessors(); i < e; ++i) {
-
     // Next Basic Block
     BasicBlock *BB_next = TI->getSuccessor(i);
 
@@ -219,7 +223,7 @@ void vSSA::renameUsesToSigma(Value *V, PHINode *sigma) {
   // This vector of Instruction* points to the uses of V.
   // This auxiliary vector of pointers is used because the use_iterators are
   // invalidated when we do the renaming
-  SmallVector<Instruction *, 25> usepointers;
+  SmallVector<Instruction *, 24> usepointers;
   unsigned i = 0, n = V->getNumUses();
   usepointers.resize(n);
 
@@ -268,8 +272,8 @@ void vSSA::renameUsesToSigma(Value *V, PHINode *sigma) {
  *  Create phi functions in the dominance frontier of sigma(V), depending on
  * some conditions
  */
-SmallVector<PHINode *, 25> vSSA::insertPhisForSigma(Value *V, PHINode *sigma) {
-  SmallVector<PHINode *, 25> phiscreated;
+SmallVector<PHINode *, 24> vSSA::insertPhisForSigma(Value *V, PHINode *sigma) {
+  SmallVector<PHINode *, 24> phiscreated;
 
   BasicBlock *BB = sigma->getParent();
 
@@ -299,21 +303,6 @@ SmallVector<PHINode *, 25> vSSA::insertPhisForSigma(Value *V, PHINode *sigma) {
     // basicblock in the frontier, and this BB dominates any use of the Value, a
     // vSSA_PHI is needed
     if (condition) {
-
-      //			// Need to discover from which BasicBlock the
-      //sigma value comes from
-      //			// To do that, we need to find which predecessor
-      //of BB_infrontier is dominated by BB_next 			BasicBlock *predBB = NULL;
-      //
-      //			for (pred_iterator PI =
-      //pred_begin(BB_infrontier), PE = pred_end(BB_infrontier); PI != PE; ++PI)
-      //{ 				predBB = *PI;
-      //
-      //				if (DT_->dominates(BB, predBB)) {
-      //					break;
-      //				}
-      //			}
-
       // Create the vSSA_PHI, and put the phi node in the deques
       // NumReservedValues is a hint for the number of incoming edges that this
       // phi node will have (use 0 if you really have no idea).
@@ -332,7 +321,7 @@ SmallVector<PHINode *, 25> vSSA::insertPhisForSigma(Value *V, PHINode *sigma) {
 }
 
 void vSSA::insertPhisForPhi(Value *V, PHINode *phi) {
-  SmallVector<PHINode *, 25> phiscreated;
+  SmallVector<PHINode *, 24> phiscreated;
 
   BasicBlock *BB = phi->getParent();
 
@@ -362,21 +351,6 @@ void vSSA::insertPhisForPhi(Value *V, PHINode *phi) {
     // basicblock in the frontier, and this BB dominates any use of the Value, a
     // vSSA_PHI is needed
     if (condition) {
-
-      //			// Need to discover from which BasicBlock the
-      //sigma value comes from
-      //			// To do that, we need to find which predecessor
-      //of BB_infrontier is dominated by BB_next 			BasicBlock *predBB = NULL;
-      //
-      //			for (pred_iterator PI =
-      //pred_begin(BB_infrontier), PE = pred_end(BB_infrontier); PI != PE; ++PI)
-      //{ 				predBB = *PI;
-      //
-      //				if (DT_->dominates(BB, predBB)) {
-      //					break;
-      //				}
-      //			}
-
       // Create the vSSA_PHI, and put the phi node in the deques
       PHINode *vssaphi = PHINode::Create(V->getType(), 0, Twine(vSSA_PHI),
                                          &(BB_infrontier->front()));
@@ -413,14 +387,14 @@ void vSSA::renameUsesToPhi(Value *V, PHINode *phi) {
   // This vector of Instruction* points to the uses of operand.
   // This auxiliary vector of pointers is used because the use_iterators are
   // invalidated when we do the renaming
-  SmallVector<Instruction *, 25> usepointers;
+  SmallVector<Instruction *, 24> usepointers;
   unsigned i = 0, n = V->getNumUses();
 
   usepointers.resize(n);
 
   // This vector contains pointers to all sigmas that have its operand renamed
   // to vSSA_phi For them, we need to try to create phi functions again
-  SmallVector<PHINode *, 25> sigmasRenamed;
+  SmallVector<PHINode *, 24> sigmasRenamed;
 
   BasicBlock *BB_next = phi->getParent();
 
@@ -529,8 +503,7 @@ void vSSA::renameUsesToPhi(Value *V, PHINode *phi) {
                                             vend = sigmasRenamed.end();
        vit != vend; ++vit) {
     renameUsesToSigma(phi, *vit);
-    SmallVector<PHINode *, 25> vssaphis_created = insertPhisForSigma(phi, *vit);
-    // insertSigmaAsOperandOfPhis(vssaphis_created, *vit);
+    SmallVector<PHINode *, 24> vssaphis_created = insertPhisForSigma(phi, *vit);
     populatePhis(vssaphis_created, (*vit)->getIncomingValue(0));
   }
 
@@ -543,7 +516,7 @@ void vSSA::renameUsesToPhi(Value *V, PHINode *phi) {
  *  Insert the sigma as an operand of the vSSA_phis contained in the vector
  */
 void vSSA::insertSigmaAsOperandOfPhis(
-    SmallVector<PHINode *, 25> &vssaphi_created, PHINode *sigma) {
+    SmallVector<PHINode *, 24> &vssaphi_created, PHINode *sigma) {
   BasicBlock *BB = sigma->getParent();
 
   for (SmallVectorImpl<PHINode *>::iterator vit = vssaphi_created.begin(),
@@ -572,7 +545,7 @@ void vSSA::insertSigmaAsOperandOfPhis(
  * incoming value of all incoming edges that still haven't an operand associated
  * for them
  */
-void vSSA::populatePhis(SmallVector<PHINode *, 25> &vssaphi_created, Value *V) {
+void vSSA::populatePhis(SmallVector<PHINode *, 24> &vssaphi_created, Value *V) {
   // If any vSSA_PHI was created, iterate over the predecessors of vSSA_PHIs to
   // insert V as an operand from the branches where sigma was not created
   for (SmallVectorImpl<PHINode *>::iterator vit = vssaphi_created.begin(),
@@ -714,6 +687,24 @@ bool vSSA::verifySigmaExistance(Value *V, BasicBlock *BB, BasicBlock *BB_from) {
   return false;
 }
 
-char vSSA::ID = 0;
-static RegisterPass<vSSA> X("vssa", "Victor's e-SSA construction", false,
-                            false);
+// Modern pass amanger registration
+
+extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
+  return {LLVM_PLUGIN_API_VERSION, DEBUG_TYPE, "v0.1", [](PassBuilder &PB) {
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, FunctionPassManager &PM,
+                   ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == DEBUG_TYPE) {
+                    PM.addPass(vSSA());
+                    return true;
+                  }
+                  return false;
+                });
+          }};
+}
+
+// Legacy pass manager registration
+
+char LegacyvSSA::ID = 0;
+static RegisterPass<LegacyvSSA> X(DEBUG_TYPE, "Victor's e-SSA construction",
+                                  false, false);
