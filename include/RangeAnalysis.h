@@ -233,7 +233,7 @@ public:
   }
   /// Pretty print.
   void print(llvm::raw_ostream &OS) const;
-  char getAbstractState() { return abstractState; }
+  char getAbstractState() const { return abstractState; }
   // The possible states are '0', '+', '-' and '?'.
   void storeAbstractState();
 };
@@ -883,15 +883,16 @@ public:
   /// Prints the content of the graph in dot format. For more informations
   /// about the dot format, see: http://www.graphviz.org/pdf/dotguide.pdf
   void print(const llvm::Function &F, llvm::raw_ostream &OS) const;
-  void printToFile(const llvm::Function &F, const std::string &FileName);
+  void printToFile(const llvm::Function &F, const std::string &FileName) const;
   /// Allow easy printing of graphs from the debugger.
   void dump(const llvm::Function &F) const {
     print(F, llvm::dbgs());
     llvm::dbgs() << '\n';
   };
-  void printResultIntervals();
+  void printResultIntervals() const;
   void computeStats();
-  Range getRange(const llvm::Value *v);
+  Range getRange(const llvm::Value *v) const;
+  const VarNodes &getVars() const { return vars; }
 };
 
 class Cousot : public ConstraintGraph {
@@ -978,10 +979,6 @@ protected:
 public:
   RangeAnalysis() = default;
   virtual ~RangeAnalysis() = default;
-  RangeAnalysis(const RangeAnalysis &) = delete;
-  RangeAnalysis &operator=(const RangeAnalysis &) = delete;
-  RangeAnalysis(RangeAnalysis &&) = delete;
-  RangeAnalysis &operator=(RangeAnalysis &&) = delete;
 
   /** Gets the maximum bit width of the operands in the instructions of the
    * function. This function is necessary because the class llvm::APInt only
@@ -993,9 +990,9 @@ public:
   static unsigned getMaxBitWidth(const llvm::Function &F);
   static void updateConstantIntegers(unsigned maxBitWidth);
 
-  virtual llvm::APInt getMin() = 0;
-  virtual llvm::APInt getMax() = 0;
-  virtual Range getRange(const llvm::Value *v) = 0;
+  virtual llvm::APInt getMin() const = 0;
+  virtual llvm::APInt getMax() const = 0;
+  virtual Range getRange(const llvm::Value *v) const = 0;
 };
 
 template <typename CGT>
@@ -1003,8 +1000,15 @@ class InterproceduralRA
     : public llvm::AnalysisInfoMixin<InterproceduralRA<CGT>>,
       RangeAnalysis {
 public:
+  virtual ~InterproceduralRA() override;
+
   using Result = RangeMap;
+  Result build(llvm::Module &);
   Result run(llvm::Module &, llvm::ModuleAnalysisManager &);
+
+  virtual llvm::APInt getMin() const override;
+  virtual llvm::APInt getMax() const override;
+  virtual Range getRange(const llvm::Value *) const override;
 
   static unsigned getMaxBitWidth(llvm::Module &M);
 
@@ -1020,8 +1024,15 @@ class IntraproceduralRA
     : public llvm::AnalysisInfoMixin<IntraproceduralRA<CGT>>,
       RangeAnalysis {
 public:
+  virtual ~IntraproceduralRA() override;
+
   using Result = RangeMap;
+  Result build(llvm::Function &);
   Result run(llvm::Function &, llvm::FunctionAnalysisManager &);
+
+  virtual llvm::APInt getMin() const override;
+  virtual llvm::APInt getMax() const override;
+  virtual Range getRange(const llvm::Value *) const override;
 
 private:
   static llvm::AnalysisKey Key;
@@ -1029,33 +1040,36 @@ private:
 };
 
 template <typename CGT>
-class LegacyInterproceduralRA : public llvm::ModulePass, RangeAnalysis {
+class LegacyInterproceduralRA : public llvm::ModulePass {
 public:
   static char ID; // Pass identification, replacement for typeid
   LegacyInterproceduralRA() : llvm::ModulePass(ID) {}
-  virtual ~LegacyInterproceduralRA() override;
   bool runOnModule(llvm::Module &M) override;
   static unsigned getMaxBitWidth(llvm::Module &M);
 
-  llvm::APInt getMin() override;
-  llvm::APInt getMax() override;
-  Range getRange(const llvm::Value *v) override;
+  llvm::APInt getMin() const;
+  llvm::APInt getMax() const;
+  Range getRange(const llvm::Value *v) const;
 
 private:
-  void MatchParametersAndReturnValues(llvm::Function &F, ConstraintGraph &G);
+  InterproceduralRA<CGT> Impl;
+  typename InterproceduralRA<CGT>::Result Ranges;
 };
 
 template <typename CGT>
-class LegacyIntraproceduralRA : public llvm::FunctionPass, RangeAnalysis {
+class LegacyIntraproceduralRA : public llvm::FunctionPass {
 public:
   static char ID; // Pass identification, replacement for typeid
   LegacyIntraproceduralRA() : llvm::FunctionPass(ID) {}
-  virtual ~LegacyIntraproceduralRA() override;
   bool runOnFunction(llvm::Function &F) override;
 
-  llvm::APInt getMin() override;
-  llvm::APInt getMax() override;
-  Range getRange(const llvm::Value *v) override;
+  llvm::APInt getMin() const;
+  llvm::APInt getMax() const;
+  Range getRange(const llvm::Value *v) const;
+
+private:
+  IntraproceduralRA<CGT> Impl;
+  typename IntraproceduralRA<CGT>::Result Ranges;
 }; // end of class RangeAnalysis
 
 } // namespace RangeAnalysis

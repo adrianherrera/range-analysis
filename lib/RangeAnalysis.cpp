@@ -36,7 +36,8 @@
 #include <llvm/IR/Use.h>
 #include <llvm/IR/User.h>
 #include <llvm/IR/Value.h>
-#include <llvm/Pass.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
 #include <llvm/Support/FileSystem.h>
 
 int __builtin_clz(unsigned int);
@@ -185,9 +186,34 @@ void RangeAnalysis::updateConstantIntegers(unsigned maxBitWidth) {
 
 template <typename CGT> AnalysisKey IntraproceduralRA<CGT>::Key;
 
+template <typename CGT> IntraproceduralRA<CGT>::~IntraproceduralRA() {
+#ifdef STATS
+  prof.printTime("BuildGraph");
+  prof.printTime("Nuutila");
+  prof.printTime("SCCs resolution");
+  prof.printTime("ComputeStats");
+  prof.printMemoryUsage();
+
+  std::ostringstream formated;
+  formated << 100 * (1.0 - (static_cast<double>(needBits) / usedBits));
+  errs() << formated.str() << "\t - "
+         << " Percentage of reduction\n";
+
+  // max visit computation
+  unsigned maxtimes = 0;
+  for (auto &pair : FerMap) {
+    unsigned times = pair.second;
+    if (times > maxtimes) {
+      maxtimes = times;
+    }
+  }
+  maxVisit = maxtimes;
+#endif
+}
+
 template <typename CGT>
 typename IntraproceduralRA<CGT>::Result
-IntraproceduralRA<CGT>::run(Function &F, FunctionAnalysisManager &) {
+IntraproceduralRA<CGT>::build(Function &F) {
   CG = new CGT();
 
   MAX_BIT_INT = getMaxBitWidth(F);
@@ -216,66 +242,66 @@ IntraproceduralRA<CGT>::run(Function &F, FunctionAnalysisManager &) {
 #endif
 
   RangeMap ranges;
-  for (const auto &[V, N] : CG->vars) {
+  for (const auto &[V, N] : CG->getVars()) {
     ranges.try_emplace(V, N->getRange());
   }
 
   return ranges;
 }
 
-// Legacy pass
+template <typename CGT>
+typename IntraproceduralRA<CGT>::Result
+IntraproceduralRA<CGT>::run(Function &F, FunctionAnalysisManager &) {
+  return build(F);
+}
 
-template <typename CGT> char LegacyIntraproceduralRA<CGT>::ID = 0;
-template <typename CGT> APInt LegacyIntraproceduralRA<CGT>::getMin() {
+template <typename CGT> APInt IntraproceduralRA<CGT>::getMin() const {
   return Min;
 }
-template <typename CGT> APInt LegacyIntraproceduralRA<CGT>::getMax() {
+
+template <typename CGT> APInt IntraproceduralRA<CGT>::getMax() const {
   return Max;
 }
+
 template <typename CGT>
-Range LegacyIntraproceduralRA<CGT>::getRange(const Value *v) {
+Range IntraproceduralRA<CGT>::getRange(const Value *v) const {
   return CG->getRange(v);
 }
 
+// Legacy pass
+
+template <typename CGT> char LegacyIntraproceduralRA<CGT>::ID = 0;
+
 template <typename CGT>
 bool LegacyIntraproceduralRA<CGT>::runOnFunction(Function &F) {
-  CG = new CGT();
-
-  MAX_BIT_INT = getMaxBitWidth(F);
-  updateConstantIntegers(MAX_BIT_INT);
-
-// Build the graph and find the intervals of the variables.
-#ifdef STATS
-  Timer *timer = prof.registerNewTimer("BuildGraph", "Build constraint graph");
-  timer->startTimer();
-#endif
-  CG->buildGraph(F);
-  CG->buildVarNodes();
-#ifdef STATS
-  timer->stopTimer();
-  prof.addTimeRecord(timer);
-
-  prof.registerMemoryUsage();
-#endif
-#ifdef PRINT_DEBUG
-  CG->printToFile(F, "/tmp/" + F.getName().str() + "cgpre.dot");
-  errs() << "Analyzing function " << F.getName() << ":\n";
-#endif
-  CG->findIntervals();
-#ifdef PRINT_DEBUG
-  CG->printToFile(F, "/tmp/" + F.getName().str() + "cgpos.dot");
-#endif
-
+  Ranges.clear();
+  Ranges = Impl.build(F);
   return false;
 }
 
+template <typename CGT> APInt LegacyIntraproceduralRA<CGT>::getMin() const {
+  return Impl.getMin();
+}
+
+template <typename CGT> APInt LegacyIntraproceduralRA<CGT>::getMax() const {
+  return Impl.getMax();
+}
+
 template <typename CGT>
-LegacyIntraproceduralRA<CGT>::~LegacyIntraproceduralRA() {
+Range LegacyIntraproceduralRA<CGT>::getRange(const Value *v) const {
+  return Impl.getRange(v);
+}
+
+// ========================================================================== //
+// InterproceduralRangeAnalysis
+// ========================================================================== //
+
+// Modern pass
+
+template <typename CGT> AnalysisKey InterproceduralRA<CGT>::Key;
+
+template <typename CGT> InterproceduralRA<CGT>::~InterproceduralRA() {
 #ifdef STATS
-  prof.printTime("BuildGraph");
-  prof.printTime("Nuutila");
-  prof.printTime("SCCs resolution");
-  prof.printTime("ComputeStats");
   prof.printMemoryUsage();
 
   std::ostringstream formated;
@@ -295,14 +321,6 @@ LegacyIntraproceduralRA<CGT>::~LegacyIntraproceduralRA() {
 #endif
 }
 
-// ========================================================================== //
-// InterproceduralRangeAnalysis
-// ========================================================================== //
-
-// Modern pass
-
-template <typename CGT> AnalysisKey InterproceduralRA<CGT>::Key;
-
 template <typename CGT>
 unsigned InterproceduralRA<CGT>::getMaxBitWidth(Module &M) {
   unsigned max = 0U;
@@ -321,7 +339,7 @@ unsigned InterproceduralRA<CGT>::getMaxBitWidth(Module &M) {
 
 template <typename CGT>
 typename InterproceduralRA<CGT>::Result
-InterproceduralRA<CGT>::run(Module &M, ModuleAnalysisManager &) {
+InterproceduralRA<CGT>::build(Module &M) {
   CG = new CGT();
 
   MAX_BIT_INT = getMaxBitWidth(M);
@@ -363,10 +381,19 @@ InterproceduralRA<CGT>::run(Module &M, ModuleAnalysisManager &) {
 #endif
 
   RangeMap ranges;
-  for (const auto &[V, N] : CG->vars) {
+  for (const auto &[V, N] : CG->getVars()) {
     ranges.try_emplace(V, N->getRange());
   }
+
+  return ranges;
 }
+
+template <typename CGT>
+typename InterproceduralRA<CGT>::Result
+InterproceduralRA<CGT>::run(Module &M, ModuleAnalysisManager &) {
+  return build(M);
+}
+
 template <typename CGT>
 void InterproceduralRA<CGT>::MatchParametersAndReturnValues(
     Function &F, ConstraintGraph &G) {
@@ -516,19 +543,22 @@ void InterproceduralRA<CGT>::MatchParametersAndReturnValues(
   }
 }
 
+template <typename CGT> APInt InterproceduralRA<CGT>::getMin() const {
+  return Min;
+}
+
+template <typename CGT> APInt InterproceduralRA<CGT>::getMax() const {
+  return Max;
+}
+
+template <typename CGT>
+Range InterproceduralRA<CGT>::getRange(const Value *v) const {
+  return CG->getRange(v);
+}
+
 // Legacy pass
 
 template <typename CGT> char LegacyInterproceduralRA<CGT>::ID = 0;
-template <typename CGT> APInt LegacyInterproceduralRA<CGT>::getMin() {
-  return Min;
-}
-template <typename CGT> APInt LegacyInterproceduralRA<CGT>::getMax() {
-  return Max;
-}
-template <typename CGT>
-Range LegacyInterproceduralRA<CGT>::getRange(const Value *v) {
-  return CG->getRange(v);
-}
 
 template <typename CGT>
 unsigned LegacyInterproceduralRA<CGT>::getMaxBitWidth(Module &M) {
@@ -537,224 +567,55 @@ unsigned LegacyInterproceduralRA<CGT>::getMaxBitWidth(Module &M) {
 
 template <typename CGT>
 bool LegacyInterproceduralRA<CGT>::runOnModule(Module &M) {
-  CG = new CGT();
-
-  MAX_BIT_INT = getMaxBitWidth(M);
-  updateConstantIntegers(MAX_BIT_INT);
-
-// Build the Constraint Graph by running on each function
-#ifdef STATS
-  Timer *timer = prof.registerNewTimer("BuildGraph", "Build constraint graph");
-  timer->startTimer();
-#endif
-  for (Function &F : M.functions()) {
-    // If the function is only a declaration, or if it has variable number of
-    // arguments, do not match
-    if (F.isDeclaration() || F.isVarArg()) {
-      continue;
-    }
-
-    CG->buildGraph(F);
-    MatchParametersAndReturnValues(F, *CG);
-  }
-  CG->buildVarNodes();
-
-#ifdef STATS
-  timer->stopTimer();
-  prof.addTimeRecord(timer);
-
-  prof.registerMemoryUsage();
-#endif
-#ifdef PRINT_DEBUG
-  std::string moduleIdentifier = M.getModuleIdentifier();
-  int pos = moduleIdentifier.rfind('/');
-  std::string mIdentifier =
-      pos > 0 ? moduleIdentifier.substr(pos) : moduleIdentifier;
-  CG->printToFile(*(M.begin()), "/tmp/" + mIdentifier + ".cgpre.dot");
-#endif
-  CG->findIntervals();
-#ifdef PRINT_DEBUG
-  CG->printToFile(*(M.begin()), "/tmp/" + mIdentifier + ".cgpos.dot");
-#endif
+  Ranges.clear();
+  Ranges = Impl.build(M);
 
   return false;
 }
 
-template <typename CGT>
-void LegacyInterproceduralRA<CGT>::MatchParametersAndReturnValues(
-    Function &F, ConstraintGraph &G) {
-  // Only do the matching if F has any use
-  if (!F.hasNUsesOrMore(1)) {
-    return;
-  }
+template <typename CGT> APInt LegacyInterproceduralRA<CGT>::getMin() const {
+  return Impl.getMin();
+}
 
-  // Data structure which contains the matches between formal and real
-  // parameters
-  // First: formal parameter
-  // Second: real parameter
-  SmallVector<std::pair<Value *, Value *>, 4> parameters(F.arg_size());
-
-  // Fetch the function arguments (formal parameters) into the data structure
-  Function::arg_iterator argptr;
-  Function::arg_iterator e;
-  unsigned i;
-
-  for (i = 0, argptr = F.arg_begin(), e = F.arg_end(); argptr != e;
-       ++i, ++argptr) {
-    parameters[i].first = &*argptr;
-  }
-
-  // Check if the function returns a supported value type. If not, no return
-  // value matching is done
-  bool noReturn = F.getReturnType()->isVoidTy();
-
-  // Creates the data structure which receives the return values of the
-  // function, if there is any
-  SmallPtrSet<Value *, 4> returnValues;
-
-  if (!noReturn) {
-    // Iterate over the basic blocks to fetch all possible return values
-    for (BasicBlock &BB : F) {
-      // Get the terminator instruction of the basic block and check if it's
-      // a return instruction: if it's not, continue to next basic block
-      Instruction *terminator = BB.getTerminator();
-
-      ReturnInst *RI = dyn_cast<ReturnInst>(terminator);
-
-      if (RI == nullptr) {
-        continue;
-      }
-
-      // Get the return value and insert in the data structure
-      returnValues.insert(RI->getReturnValue());
-    }
-  }
-
-  // For each use of F, get the real parameters and the caller instruction to do
-  // the matching
-  SmallVector<PhiOp *, 4> matchers(F.arg_size(), nullptr);
-
-  for (unsigned i = 0, e = parameters.size(); i < e; ++i) {
-    VarNode *sink = G.addVarNode(parameters[i].first);
-
-    matchers[i] = new PhiOp(new BasicInterval(), sink, nullptr);
-
-    // Insert the operation in the graph.
-    G.getOprs()->insert(matchers[i]);
-
-    // Insert this definition in defmap
-    (*G.getDefMap())[sink->getValue()] = matchers[i];
-  }
-
-  // For each return value, create a node
-  SmallVector<VarNode *, 4> returnVars;
-
-  for (Value *returnValue : returnValues) {
-    // Add VarNode to the CG
-    VarNode *from = G.addVarNode(returnValue);
-
-    returnVars.push_back(from);
-  }
-
-  for (Use &U : F.uses()) {
-    User *Us = U.getUser();
-
-    // Ignore blockaddress uses
-    if (isa<BlockAddress>(Us)) {
-      continue;
-    }
-
-    // Used by a non-instruction, or not the callee of a function, do not
-    // match.
-    if (!isa<CallBase>(Us)) {
-      continue;
-    }
-
-    CallBase *caller = cast<CallBase>(Us);
-
-    if (!caller->isCallee(&U)) {
-      continue;
-    }
-
-    // Iterate over the real parameters and put them in the data structure
-    User::op_iterator AI, EI;
-
-    for (i = 0, AI = caller->arg_begin(), EI = caller->arg_end(); AI != EI;
-         ++i, ++AI) {
-      parameters[i].second = *AI;
-    }
-
-    // // Do the interprocedural construction of CG
-    VarNode *to = nullptr;
-    VarNode *from = nullptr;
-
-    // Match formal and real parameters
-    for (i = 0; i < parameters.size(); ++i) {
-      // Add real parameter to the CG
-      from = G.addVarNode(parameters[i].second);
-
-      // Connect nodes
-      matchers[i]->addSource(from);
-
-      // Inserts the sources of the operation in the use map list.
-      G.getUseMap()->find(from->getValue())->second.insert(matchers[i]);
-    }
-
-    // Match return values
-    if (!noReturn) {
-      // Add caller instruction to the CG (it receives the return value)
-      to = G.addVarNode(caller);
-
-      PhiOp *phiOp = new PhiOp(new BasicInterval(), to, nullptr);
-
-      // Insert the operation in the graph.
-      G.getOprs()->insert(phiOp);
-
-      // Insert this definition in defmap
-      (*G.getDefMap())[to->getValue()] = phiOp;
-
-      for (VarNode *var : returnVars) {
-        phiOp->addSource(var);
-
-        // Inserts the sources of the operation in the use map list.
-        G.getUseMap()->find(var->getValue())->second.insert(phiOp);
-      }
-    }
-
-    // Real parameters are cleaned before moving to the next use (for safety's
-    // sake)
-    for (auto &pair : parameters) {
-      pair.second = nullptr;
-    }
-  }
+template <typename CGT> APInt LegacyInterproceduralRA<CGT>::getMax() const {
+  return Impl.getMax();
 }
 
 template <typename CGT>
-LegacyInterproceduralRA<CGT>::~LegacyInterproceduralRA() {
-#ifdef STATS
-  prof.printMemoryUsage();
+Range LegacyInterproceduralRA<CGT>::getRange(const Value *v) const {
+  return Impl.getRange(v);
+}
 
-  std::ostringstream formated;
-  formated << 100 * (1.0 - (static_cast<double>(needBits) / usedBits));
-  errs() << formated.str() << "\t - "
-         << " Percentage of reduction\n";
+// ========================================================================== //
+// Pass registration
+// ========================================================================== //
 
-  // max visit computation
-  unsigned maxtimes = 0;
-  for (auto &pair : FerMap) {
-    unsigned times = pair.second;
-    if (times > maxtimes) {
-      maxtimes = times;
-    }
-  }
-  maxVisit = maxtimes;
-#endif
+extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
+  return {
+      LLVM_PLUGIN_API_VERSION, "range-analysis", LLVM_VERSION_STRING,
+      [](PassBuilder &PB) {
+        PB.registerAnalysisRegistrationCallback(
+            [](FunctionAnalysisManager &AM) {
+              AM.registerPass([] { return IntraproceduralRA<Cousot>(); });
+            });
+        PB.registerAnalysisRegistrationCallback(
+            [](FunctionAnalysisManager &AM) {
+              AM.registerPass([] { return IntraproceduralRA<CropDFS>(); });
+            });
+        PB.registerAnalysisRegistrationCallback([](ModuleAnalysisManager &AM) {
+          AM.registerPass([] { return InterproceduralRA<Cousot>(); });
+        });
+        PB.registerAnalysisRegistrationCallback([](ModuleAnalysisManager &AM) {
+          AM.registerPass([] { return InterproceduralRA<CropDFS>(); });
+        });
+      }};
 }
 
 static RegisterPass<LegacyIntraproceduralRA<Cousot>>
     Y("ra-intra-cousot", "Range Analysis (Cousot - intra)");
 static RegisterPass<LegacyIntraproceduralRA<CropDFS>>
     Z("ra-intra-crop", "Range Analysis (Crop - intra)");
+
 static RegisterPass<LegacyInterproceduralRA<Cousot>>
     W("ra-inter-cousot", "Range Analysis (Cousot - inter)");
 static RegisterPass<LegacyInterproceduralRA<CropDFS>>
@@ -2207,8 +2068,8 @@ ConstraintGraph::~ConstraintGraph() {
   }
 }
 
-Range ConstraintGraph::getRange(const Value *v) {
-  VarNodes::iterator vit = this->vars.find(v);
+Range ConstraintGraph::getRange(const Value *v) const {
+  const auto &vit = this->vars.find(v);
 
   if (vit == this->vars.end()) {
     // If the value doesn't have a range,
@@ -3506,7 +3367,7 @@ void ConstraintGraph::print(const Function &F, raw_ostream &OS) const {
 }
 
 void ConstraintGraph::printToFile(const Function &F,
-                                  const std::string &FileName) {
+                                  const std::string &FileName) const {
   std::error_code ErrorInfo;
   raw_fd_ostream file(FileName, ErrorInfo, sys::fs::OF_Text);
 
@@ -3519,7 +3380,7 @@ void ConstraintGraph::printToFile(const Function &F,
   }
 }
 
-void ConstraintGraph::printResultIntervals() {
+void ConstraintGraph::printResultIntervals() const {
   for (const auto &pair : vars) {
     if (const ConstantInt *C = dyn_cast<ConstantInt>(pair.first)) {
       errs() << C->getValue() << " ";
