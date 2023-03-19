@@ -48,9 +48,10 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/Pass.h>
-#include <llvm/Support/Timer.h>
 #include <llvm/Support/Debug.h>
+#include <llvm/Support/Timer.h>
 #include <llvm/Support/raw_ostream.h>
 
 namespace RangeAnalysis {
@@ -91,14 +92,14 @@ namespace RangeAnalysis {
     if ((A = llvm::dyn_cast<llvm::Argument>(V))) {                             \
       llvm::errs() << A->getParent()->getName() << "." << A->getName();        \
     } else if ((I = llvm::dyn_cast<llvm::Instruction>(V))) {                   \
-      errs() << I->getParent()->getParent()->getName() << "."                  \
-             << I->getParent()->getName() << "." << I->getName();              \
+      llvm::errs() << I->getParent()->getParent()->getName() << "."            \
+                   << I->getParent()->getName() << "." << I->getName();        \
     } else if ((CI = llvm::dyn_cast<llvm::ConstantInt>(V))) {                  \
-      errs() << CI->getValue();                                                \
+      llvm::errs() << CI->getValue();                                          \
     }                                                                          \
-    errs() << "\n";                                                            \
+    llvm::errs() << "\n";                                                      \
   }                                                                            \
-  errs() << "\n----------\n";
+  llvm::errs() << "\n----------\n";
 
 #ifdef SCC_DEBUG
 #define ASSERT(cond, msg)                                                      \
@@ -745,6 +746,8 @@ public:
   }
 };
 
+using RangeMap = llvm::DenseMap<const llvm::Value *, Range>;
+
 // The VarNodes type.
 using VarNodes = llvm::DenseMap<const llvm::Value *, VarNode *>;
 
@@ -812,8 +815,6 @@ private:
   void buildValueBranchMap(const llvm::BranchInst *br);
   void buildValueSwitchMap(const llvm::SwitchInst *sw);
   void buildValueMaps(const llvm::Function &F);
-
-  //	void clearValueMaps();
 
   void insertConstantIntoVector(llvm::APInt constantval);
   llvm::APInt getFirstGreaterFromVector(
@@ -997,18 +998,43 @@ public:
   virtual Range getRange(const llvm::Value *v) = 0;
 };
 
-template <class CGT>
-class InterProceduralRA : public llvm::ModulePass, RangeAnalysis {
+template <typename CGT>
+class InterproceduralRA
+    : public llvm::AnalysisInfoMixin<InterproceduralRA<CGT>>,
+      RangeAnalysis {
+public:
+  using Result = RangeMap;
+  Result run(llvm::Module &, llvm::ModuleAnalysisManager &);
+
+  static unsigned getMaxBitWidth(llvm::Module &M);
+
+private:
+  static llvm::AnalysisKey Key;
+  friend class llvm::AnalysisInfoMixin<InterproceduralRA<CGT>>;
+
+  void MatchParametersAndReturnValues(llvm::Function &F, ConstraintGraph &G);
+};
+
+template <typename CGT>
+class IntraproceduralRA
+    : public llvm::AnalysisInfoMixin<IntraproceduralRA<CGT>>,
+      RangeAnalysis {
+public:
+  using Result = RangeMap;
+  Result run(llvm::Function &, llvm::FunctionAnalysisManager &);
+
+private:
+  static llvm::AnalysisKey Key;
+  friend class llvm::AnalysisInfoMixin<IntraproceduralRA<CGT>>;
+};
+
+template <typename CGT>
+class LegacyInterproceduralRA : public llvm::ModulePass, RangeAnalysis {
 public:
   static char ID; // Pass identification, replacement for typeid
-  InterProceduralRA() : llvm::ModulePass(ID) {}
-  ~InterProceduralRA() override;
-  InterProceduralRA(const InterProceduralRA &) = delete;
-  InterProceduralRA &operator=(const InterProceduralRA &) = delete;
-  InterProceduralRA(InterProceduralRA &&) = delete;
-  InterProceduralRA &operator=(InterProceduralRA &&) = delete;
+  LegacyInterproceduralRA() : llvm::ModulePass(ID) {}
+  virtual ~LegacyInterproceduralRA() override;
   bool runOnModule(llvm::Module &M) override;
-  void getAnalysisUsage(llvm::AnalysisUsage &AU) const override;
   static unsigned getMaxBitWidth(llvm::Module &M);
 
   llvm::APInt getMin() override;
@@ -1019,22 +1045,18 @@ private:
   void MatchParametersAndReturnValues(llvm::Function &F, ConstraintGraph &G);
 };
 
-template <class CGT>
-class IntraProceduralRA : public llvm::FunctionPass, RangeAnalysis {
+template <typename CGT>
+class LegacyIntraproceduralRA : public llvm::FunctionPass, RangeAnalysis {
 public:
   static char ID; // Pass identification, replacement for typeid
-  IntraProceduralRA() : llvm::FunctionPass(ID) {}
-  ~IntraProceduralRA() override;
-  IntraProceduralRA(const IntraProceduralRA &) = delete;
-  IntraProceduralRA &operator=(const IntraProceduralRA &) = delete;
-  IntraProceduralRA(IntraProceduralRA &&) = delete;
-  IntraProceduralRA &operator=(IntraProceduralRA &&) = delete;
-  void getAnalysisUsage(llvm::AnalysisUsage &AU) const override;
+  LegacyIntraproceduralRA() : llvm::FunctionPass(ID) {}
+  virtual ~LegacyIntraproceduralRA() override;
   bool runOnFunction(llvm::Function &F) override;
 
   llvm::APInt getMin() override;
   llvm::APInt getMax() override;
   Range getRange(const llvm::Value *v) override;
 }; // end of class RangeAnalysis
+
 } // namespace RangeAnalysis
 #endif // _RANGEANALYSIS_RANGEANALYSIS_H
