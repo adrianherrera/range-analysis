@@ -54,7 +54,7 @@
 #include <llvm/Support/Timer.h>
 #include <llvm/Support/raw_ostream.h>
 
-namespace RangeAnalysis {
+namespace range_analysis {
 
 // Comment the line below to disable the debug of SCCs and optimize the code
 // generated.
@@ -62,9 +62,6 @@ namespace RangeAnalysis {
 
 // Comment the line below to disable the dot printing of Constraint Graphs
 #define PRINT_DEBUG
-
-// Used to enable the stats computing. Comment the below line to disable it
-#define STATS
 
 // Uncomment the line below to activate jump-set widening technique
 // It generally leads to better precision in spite of low overhead in
@@ -977,9 +974,6 @@ protected:
   ConstraintGraph *CG{nullptr};
 
 public:
-  RangeAnalysis() = default;
-  virtual ~RangeAnalysis() = default;
-
   /** Gets the maximum bit width of the operands in the instructions of the
    * function. This function is necessary because the class llvm::APInt only
    * supports binary operations on operands that have the same number of
@@ -987,7 +981,7 @@ public:
    * will have the maximum bit size. The complexity of this function is linear
    * on the number of operands used in the function.
    */
-  static unsigned getMaxBitWidth(const llvm::Function &F);
+  static unsigned long getMaxBitWidth(const llvm::Function &F);
   static void updateConstantIntegers(unsigned maxBitWidth);
 
   virtual llvm::APInt getMin() const = 0;
@@ -1000,8 +994,6 @@ class InterproceduralRA
     : public llvm::AnalysisInfoMixin<InterproceduralRA<CGT>>,
       RangeAnalysis {
 public:
-  virtual ~InterproceduralRA() override;
-
   using Result = RangeMap;
   Result build(llvm::Module &);
   Result run(llvm::Module &, llvm::ModuleAnalysisManager &);
@@ -1010,7 +1002,7 @@ public:
   virtual llvm::APInt getMax() const override;
   virtual Range getRange(const llvm::Value *) const override;
 
-  static unsigned getMaxBitWidth(llvm::Module &M);
+  static unsigned long getMaxBitWidth(llvm::Module &M);
 
 private:
   static llvm::AnalysisKey Key;
@@ -1024,8 +1016,6 @@ class IntraproceduralRA
     : public llvm::AnalysisInfoMixin<IntraproceduralRA<CGT>>,
       RangeAnalysis {
 public:
-  virtual ~IntraproceduralRA() override;
-
   using Result = RangeMap;
   Result build(llvm::Function &);
   Result run(llvm::Function &, llvm::FunctionAnalysisManager &);
@@ -1072,5 +1062,5 @@ private:
   typename IntraproceduralRA<CGT>::Result Ranges;
 }; // end of class RangeAnalysis
 
-} // namespace RangeAnalysis
+} // namespace range_analysis
 #endif // _RANGEANALYSIS_RANGEANALYSIS_H

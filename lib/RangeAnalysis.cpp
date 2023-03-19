@@ -46,7 +46,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "range-analysis"
 
-namespace RangeAnalysis {
+namespace range_analysis {
 
 // These macros are used to get stats regarding the precision of our analysis.
 STATISTIC(usedBits, "Initial number of bits.");
@@ -66,7 +66,6 @@ STATISTIC(numConstants, "Number of constants.");
 STATISTIC(numZeroUses, "Number of variables without any use.");
 STATISTIC(numNotInt, "Number of variables that are not Integer.");
 STATISTIC(numOps, "Number of operations");
-STATISTIC(maxVisit, "Max number of times a value has been visited.");
 
 namespace {
 // The number of bits needed to store the largest variable of the function
@@ -93,11 +92,6 @@ const std::string sigmaString = "vSSA_sigma";
 // Used to print pseudo-edges in the Constraint Graph dot
 std::string pestring;
 raw_string_ostream pseudoEdgesString(pestring);
-
-#ifdef STATS
-// Used to profile
-Profile prof;
-#endif
 
 // Print name of variable according to its type
 void printVarName(const Value *V, raw_ostream &OS) {
@@ -143,8 +137,10 @@ bool isValidInstruction(const Instruction *I) {
 // RangeAnalysis
 // ========================================================================== //
 
-unsigned RangeAnalysis::getMaxBitWidth(const Function &F) {
-  unsigned int InstBitSize = 0, opBitSize = 0, max = 0;
+unsigned long RangeAnalysis::getMaxBitWidth(const Function &F) {
+  unsigned long InstBitSize = 0;
+  unsigned long opBitSize = 0;
+  unsigned long max = 0;
 
   // Obtains the maximum bit width of the instructions of the function.
   for (const Instruction &I : instructions(F)) {
@@ -186,31 +182,6 @@ void RangeAnalysis::updateConstantIntegers(unsigned maxBitWidth) {
 
 template <typename CGT> AnalysisKey IntraproceduralRA<CGT>::Key;
 
-template <typename CGT> IntraproceduralRA<CGT>::~IntraproceduralRA() {
-#ifdef STATS
-  prof.printTime("BuildGraph");
-  prof.printTime("Nuutila");
-  prof.printTime("SCCs resolution");
-  prof.printTime("ComputeStats");
-  prof.printMemoryUsage();
-
-  std::ostringstream formated;
-  formated << 100 * (1.0 - (static_cast<double>(needBits) / usedBits));
-  errs() << formated.str() << "\t - "
-         << " Percentage of reduction\n";
-
-  // max visit computation
-  unsigned maxtimes = 0;
-  for (auto &pair : FerMap) {
-    unsigned times = pair.second;
-    if (times > maxtimes) {
-      maxtimes = times;
-    }
-  }
-  maxVisit = maxtimes;
-#endif
-}
-
 template <typename CGT>
 typename IntraproceduralRA<CGT>::Result
 IntraproceduralRA<CGT>::build(Function &F) {
@@ -219,19 +190,9 @@ IntraproceduralRA<CGT>::build(Function &F) {
   MAX_BIT_INT = getMaxBitWidth(F);
   updateConstantIntegers(MAX_BIT_INT);
 
-// Build the graph and find the intervals of the variables.
-#ifdef STATS
-  Timer *timer = prof.registerNewTimer("BuildGraph", "Build constraint graph");
-  timer->startTimer();
-#endif
+  // Build the graph and find the intervals of the variables.
   CG->buildGraph(F);
   CG->buildVarNodes();
-#ifdef STATS
-  timer->stopTimer();
-  prof.addTimeRecord(timer);
-
-  prof.registerMemoryUsage();
-#endif
 #ifdef PRINT_DEBUG
   CG->printToFile(F, "/tmp/" + F.getName().str() + "cgpre.dot");
   errs() << "Analyzing function " << F.getName() << ":\n";
@@ -300,29 +261,8 @@ Range LegacyIntraproceduralRA<CGT>::getRange(const Value *v) const {
 
 template <typename CGT> AnalysisKey InterproceduralRA<CGT>::Key;
 
-template <typename CGT> InterproceduralRA<CGT>::~InterproceduralRA() {
-#ifdef STATS
-  prof.printMemoryUsage();
-
-  std::ostringstream formated;
-  formated << 100 * (1.0 - (static_cast<double>(needBits) / usedBits));
-  errs() << formated.str() << "\t - "
-         << " Percentage of reduction\n";
-
-  // max visit computation
-  unsigned maxtimes = 0;
-  for (auto &pair : FerMap) {
-    unsigned times = pair.second;
-    if (times > maxtimes) {
-      maxtimes = times;
-    }
-  }
-  maxVisit = maxtimes;
-#endif
-}
-
 template <typename CGT>
-unsigned InterproceduralRA<CGT>::getMaxBitWidth(Module &M) {
+unsigned long InterproceduralRA<CGT>::getMaxBitWidth(Module &M) {
   unsigned max = 0U;
   // Search through the functions for the max int bitwidth
   for (const Function &F : M.functions()) {
@@ -345,11 +285,7 @@ InterproceduralRA<CGT>::build(Module &M) {
   MAX_BIT_INT = getMaxBitWidth(M);
   updateConstantIntegers(MAX_BIT_INT);
 
-// Build the Constraint Graph by running on each function
-#ifdef STATS
-  Timer *timer = prof.registerNewTimer("BuildGraph", "Build constraint graph");
-  timer->startTimer();
-#endif
+  // Build the Constraint Graph by running on each function
   for (Function &F : M.functions()) {
     // If the function is only a declaration, or if it has variable number of
     // arguments, do not match
@@ -362,17 +298,11 @@ InterproceduralRA<CGT>::build(Module &M) {
   }
   CG->buildVarNodes();
 
-#ifdef STATS
-  timer->stopTimer();
-  prof.addTimeRecord(timer);
-
-  prof.registerMemoryUsage();
-#endif
 #ifdef PRINT_DEBUG
   std::string moduleIdentifier = M.getModuleIdentifier();
   int pos = moduleIdentifier.rfind('/');
   std::string mIdentifier =
-      pos > 0 ? moduleIdentifier.substr(pos) : moduleIdentifier;
+      pos > 0 ? moduleIdentifier.substr((unsigned)pos) : moduleIdentifier;
   CG->printToFile(*(M.begin()), "/tmp/" + mIdentifier + ".cgpre.dot");
 #endif
   CG->findIntervals();
@@ -3110,13 +3040,6 @@ void ConstraintGraph::update(
     const Value *V = *actv.begin();
     actv.erase(V);
 
-#ifdef STATS
-    // Updates Fermap
-    if (meet == Meet::narrow) {
-      FerMap[V]++;
-    }
-#endif
-
     // The use list.
     const SmallPtrSet<BasicOp *, 8> &L = compUseMap.find(V)->second;
 
@@ -3153,33 +3076,17 @@ void ConstraintGraph::update(unsigned nIterations, const UseMap &compUseMap,
 
 /// Finds the intervals of the variables in the graph.
 void ConstraintGraph::findIntervals() {
-// Builds symbMap
-#ifdef STATS
-  Timer *timer = prof.registerNewTimer(
-      "Nuutila", "Nuutila's algorithm for strongly connected components");
-  timer->startTimer();
-#endif
+  // Builds symbMap
   buildSymbolicIntersectMap();
 
   // List of SCCs
   Nuutila sccList(&vars, &useMap, &symbMap);
-#ifdef STATS
-  timer->stopTimer();
-  prof.addTimeRecord(timer);
-// delete timer;
-#endif
-  // STATS
   numSCCs += sccList.worklist.size();
 #ifdef SCC_DEBUG
   unsigned numberOfSCCs = numSCCs;
 #endif
 
-// For each SCC in graph, do the following
-#ifdef STATS
-  timer = prof.registerNewTimer("ConstraintSolving", "Constraint solving");
-  timer->startTimer();
-#endif
-
+  // For each SCC in graph, do the following
   for (Nuutila::iterator nit = sccList.begin(), nend = sccList.end();
        nit != nend; ++nit) {
     SmallPtrSet<VarNode *, 32> &component = *sccList.components[*nit];
@@ -3249,23 +3156,8 @@ void ConstraintGraph::findIntervals() {
     propagateToNextSCC(component);
   }
 
-#ifdef STATS
-  timer->stopTimer();
-  prof.addTimeRecord(timer);
-#endif
-
 #ifdef SCC_DEBUG
   ASSERT(numberOfSCCs == 0, "Not all SCCs have been visited")
-#endif
-
-#ifdef STATS
-  timer = prof.registerNewTimer("ComputeStats", "Compute statistics");
-  timer->startTimer();
-
-  computeStats();
-
-  timer->stopTimer();
-  prof.addTimeRecord(timer);
 #endif
 }
 
@@ -3909,4 +3801,4 @@ bool Nuutila::checkTopologicalSort(UseMap *useMap) {
 }
 
 #endif
-} // namespace RangeAnalysis
+} // namespace range_analysis
