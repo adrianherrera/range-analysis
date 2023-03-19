@@ -5,7 +5,14 @@ project(RangeAnalysis)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
+
+add_compile_options(
+  -Werror
+  -Wall
+  -Wextra
+  -Wreturn-type
+  -Wimplicit-fallthrough
+)
 
 find_package(LLVM 14 REQUIRED)
 message(STATUS "Found LLVM ${LLVM_CMAKE_DIR}")

@@ -192,6 +192,8 @@ public:
   Range unionWith(const Range &other) const;
   bool operator==(const Range &other) const;
   bool operator!=(const Range &other) const;
+
+  friend llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Range &);
 };
 
 /// This class represents a program variable.
