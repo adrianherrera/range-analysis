@@ -16,11 +16,26 @@
 using namespace llvm;
 
 namespace {
+enum Analysis {
+  INTRA_COUSOT,
+  INTRA_CROP,
+  INTER_COUSOT,
+  INTER_CROP,
+};
+
 static cl::OptionCategory RACat("range analysis options");
 
 static cl::opt<std::string> InFile(cl::Positional, cl::desc("<BC file>"),
                                    cl::value_desc("path"), cl::Required,
                                    cl::cat(RACat));
+
+static cl::opt<Analysis> RAType(
+    "range-analysis", cl::desc("Type of range analysis"),
+    cl::values(
+        clEnumValN(INTRA_COUSOT, "intra-cousot", "Intraprocedural (Cousot)"),
+        clEnumValN(INTRA_CROP, "intra-cropt", "Intraprocedural (CropDFS)"),
+        clEnumValN(INTER_COUSOT, "inter-cousot", "Interprocedural (Cousot)"),
+        clEnumValN(INTER_CROP, "inter-crop", "Interprocedural (CropDFS)")));
 } // anonymous namespace
 
 int main(int argc, char *argv[]) {
@@ -48,9 +63,28 @@ int main(int argc, char *argv[]) {
   MPM.addPass(VerifierPass());
 #endif
 
-  MAM.registerPass([] {
-    return range_analysis::InterproceduralRA<range_analysis::Cousot>();
-  });
+  switch (RAType) {
+  case Analysis::INTRA_COUSOT:
+    FAM.registerPass([] {
+      return range_analysis::IntraproceduralRA<range_analysis::Cousot>();
+    });
+    break;
+  case Analysis::INTRA_CROP:
+    FAM.registerPass([] {
+      return range_analysis::IntraproceduralRA<range_analysis::CropDFS>();
+    });
+    break;
+  case Analysis::INTER_COUSOT:
+    MAM.registerPass([] {
+      return range_analysis::InterproceduralRA<range_analysis::Cousot>();
+    });
+    break;
+  case Analysis::INTER_CROP:
+    MAM.registerPass([] {
+      return range_analysis::InterproceduralRA<range_analysis::CropDFS>();
+    });
+    break;
+  }
 
   // Create the new pass manager builder
   llvm::PassBuilder PB;
